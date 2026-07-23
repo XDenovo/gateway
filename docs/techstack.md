@@ -16,8 +16,9 @@
 | Persistence | Drizzle ORM、`pg`（node-postgres）、drizzle-kit |
 | Authentication | Better Auth、Drizzle Adapter、OAuth 2.1 Provider、JWT/JWKS |
 | Internal Credential | `jose`；与外部 Access Token 使用独立的 issuer、签名密钥和 JWKS |
-| Public MCP Server | `@prefecthq/fastmcp-ts/server` |
+| Public MCP Server | `@prefecthq/fastmcp-ts/server`、`@hono/mcp` Streamable HTTP Transport |
 | Downstream MCP Client | `@prefecthq/fastmcp-ts/client`；通过 Streamable HTTP 调用 Compute MCP Services |
+| MCP Protocol SDK | 官方 `@modelcontextprotocol/sdk`；作为 `@hono/mcp` 的直接 Peer Dependency |
 | Dashboard Web API | Hono RPC；Gateway 发布版本化、预编译的 `@xdenovo/gateway-client` 供 Website 使用 |
 | Rate Limiting | Better Auth 内置 Rate Limiter、`rate-limiter-flexible`；当前使用进程内存 Backend |
 | Validation | Zod；Hono Route 边界使用 `@hono/zod-validator` |
@@ -72,7 +73,44 @@ Captcha 和 Have I Been Pwned 插件。
 具体 Route、issuer、audience、scope、Consent、Token 验证、账户关联、安全控制和 Migration 流程不属于
 技术栈文档；这些内容在认证设计或 ADR 中记录。
 
-## 3. 内部凭证
+## 3. Hono 组件组合
+
+### 3.1 HTTP 与 API
+
+| 能力 | 选择 |
+|---|---|
+| HTTP Application | Hono |
+| Node.js Adapter | `@hono/node-server` |
+| Dashboard API | Hono RPC、`hono/client` 的 `hc` |
+| Request Validation | `@hono/zod-validator`、Zod |
+| Public MCP Transport | `@hono/mcp` `StreamableHTTPTransport` |
+| Route Testing | Hono `app.request()` |
+
+Hono 和 `@hono/node-server` 共同拥有 Gateway 唯一的应用 HTTP Listener。FastMCP Server 通过
+`connect(transport)` 连接到 `@hono/mcp` Transport，再作为 Hono Route 提供 Public MCP Endpoint；
+Gateway 不调用 FastMCP 的 HTTP `run()` 启动第二个 Listener。
+
+### 3.2 Middleware
+
+| 边界 | 选择 |
+|---|---|
+| Request Correlation | Hono `requestId()` |
+| Structured Logging | 仓库内 Hono Middleware 注入 request-scoped Pino Child Logger |
+| Browser CORS | Hono `cors()`；只应用于 Website 使用的 Auth 与 Dashboard API Routes |
+| CSRF Baseline | Hono `csrf()`；只应用于基于 Cookie 的 Browser Routes |
+| Request Body Size | Hono `bodyLimit()`；按 Route 配置 |
+| Error Boundary | Hono `app.onError()` |
+
+Hono `csrf()` 只提供基于 Origin、Fetch Metadata 和浏览器可提交 Content Type 的基础保护，不替代 Better Auth
+的 Trusted Origins、Cookie 策略或 Dashboard API 的完整 CSRF 设计。CORS Origin、Methods、Credentials、
+Body Limit 和错误响应格式属于安全与 API 设计，不在本文展开。
+
+Hono `logger()`、`jwt()`、`jwk()`、全局 `timeout()`、`compress()`、Cache 和 ETag 不采用。日志使用 Pino；
+外部认证由 Better Auth 与 FastMCP Token Verifier 处理；内部凭证签发使用 `jose`；压缩由 Caddy 负责；
+Auth、Dashboard API 和 MCP 不使用通用响应缓存。超时按 Route 和下游调用配置，不能用全局 Middleware
+中断 MCP Streaming 或长调用。
+
+## 4. 内部凭证
 
 | 能力 | 选择 |
 |---|---|
@@ -85,7 +123,7 @@ Compute MCP Service 不接受 Better Auth 外部 Access Token，Gateway 也不�
 
 内部凭证 Claims、audience、scope、有效期、密钥轮换和 JWKS 分发属于跨服务安全契约，在认证设计或 ADR 中记录。
 
-## 4. MCP Server 与 Client
+## 5. MCP Server 与 Client
 
 Gateway 在一次调用链中同时承担 MCP Server 和 MCP Client 两种角色：
 
@@ -95,17 +133,17 @@ Gateway 在一次调用链中同时承担 MCP Server 和 MCP Client 两种角色
 
 | 角色 | 选择 | 用途 |
 |---|---|---|
-| Public MCP Server | `@prefecthq/fastmcp-ts/server` | 接收外部 MCP Client 的工具发现与调用 |
+| Public MCP Server | `@prefecthq/fastmcp-ts/server`、`@hono/mcp` | 通过 Hono 接收外部 MCP Client 的工具发现与调用 |
 | Downstream MCP Client | `@prefecthq/fastmcp-ts/client` | 携带短期内部凭证，通过 Streamable HTTP 调用目标 Compute MCP Service |
 
-`@prefecthq/fastmcp-ts` 建立在官方 MCP TypeScript SDK 之上，并同时提供 Server 和 Client API。Gateway 当前
-直接使用 FastMCP 的 Client API，因此不把 `@modelcontextprotocol/sdk` 作为独立的直接依赖；只有在实现中
-确实需要 FastMCP 未暴露的底层协议能力时才重新评估。
+`@prefecthq/fastmcp-ts` 建立在官方 MCP TypeScript SDK 之上，并同时提供 Server 和 Client API。
+`@hono/mcp` 提供与 Hono 集成的 Streamable HTTP Transport，并将 `@modelcontextprotocol/sdk` 声明为
+Peer Dependency；Gateway 因此直接依赖官方 SDK，并将三者保持在兼容版本范围。
 
 具体工具路由、下游连接生命周期、取消与流式传播、错误映射和使用事件记录属于 Gateway MCP 设计，不在本文
 展开。
 
-## 5. 限流
+## 6. 限流
 
 | 边界 | 组件 | Backend |
 |---|---|---|
@@ -121,7 +159,7 @@ Backend 迁移到 Redis 或 Valkey。
 
 具体 Key、Window、Limit、响应 Header、可信代理 IP 解析和故障策略属于安全与 API 设计，不在本文展开。
 
-## 6. 可观测性组件组合
+## 7. 可观测性组件组合
 
 | 能力 | 选择 |
 |---|---|
@@ -139,7 +177,7 @@ JavaScript Logs Signal 稳定后再评估。
 具体日志字段、Request ID 传播、敏感字段脱敏、Trace 采样、Metrics 和 Collector 后端配置不属于技术栈
 文档；这些内容在 Gateway 实施规范和 `platform-deploy` 可观测性设计中记录。
 
-## 7. 测试组件组合
+## 8. 测试组件组合
 
 | 能力 | 选择 |
 |---|---|
@@ -150,12 +188,12 @@ JavaScript Logs Signal 稳定后再评估。
 Vitest 与 `@vitest/coverage-v8` 保持相同版本，Testcontainers 核心包与 PostgreSQL Module 保持相同版本；
 精确版本由 `package.json` 和 `pnpm-lock.yaml` 固定。SQLite 和数据库 Mock 不替代 PostgreSQL 集成测试。
 
-## 8. Formatter 与 Linter
+## 9. Formatter 与 Linter
 
 Biome（`@biomejs/biome`）统一承担代码格式化和静态检查，不并行使用 Prettier 或 ESLint。精确版本和命令由
 `package.json`、`pnpm-lock.yaml` 与 `biome.json` 定义。
 
-## 9. 类型检查、构建与开发运行
+## 10. 类型检查、构建与开发运行
 
 | 能力 | 选择 |
 |---|---|
@@ -172,7 +210,7 @@ Runtime。Node.js 原生 Type Stripping 不读取 `tsconfig.json`，因此当前
 提供。tsdown 仅在 `@xdenovo/gateway-client` 出现多入口、声明文件打包或单文件输出等实际需求后重新评估。
 精确版本、Package Exports 和构建命令由 `package.json`、`pnpm-lock.yaml` 与 TypeScript 配置定义。
 
-## 10. Gateway Client 发布
+## 11. Gateway Client 发布
 
 | 能力 | 选择 |
 |---|---|
@@ -190,7 +228,7 @@ GitHub Packages。
 精确 SemVer 策略、Package Access、Release Workflow 和 Website 安装认证属于发布规范与 CI 实施，不在
 本文展开。
 
-## 11. 环境配置
+## 12. 环境配置
 
 | 能力 | 选择 |
 |---|---|
