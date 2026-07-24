@@ -13,6 +13,8 @@ node_modules/
 
 # build
 dist/
+/.artifacts/
+/.client-build/
 
 # linked worktrees created for issue-scoped development
 /.worktrees/

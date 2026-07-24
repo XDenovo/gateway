@@ -8,31 +8,32 @@ import {
 
 const validEnvironment = {
   NODE_ENV: 'development',
-  BETTER_AUTH_BASE_URL: 'http://localhost:3000',
+  BETTER_AUTH_BASE_URL: 'http://localhost:3001',
   BETTER_AUTH_BASE_PATH: '/api/auth',
   BETTER_AUTH_SECRET: 'local-only-secret-with-at-least-32-characters',
-  BETTER_AUTH_TRUSTED_ORIGINS: 'http://localhost:3001,http://127.0.0.1:3001',
+  GATEWAY_BROWSER_ALLOWED_ORIGINS:
+    'http://localhost:3000,http://127.0.0.1:3000',
   DATABASE_MIGRATION_URL:
     'postgresql://gateway_migrator:migrator-password@127.0.0.1:5432/platform',
   DATABASE_RUNTIME_URL:
     'postgresql://gateway_runtime:runtime-password@127.0.0.1:5432/platform',
   SERVER_HOST: '127.0.0.1',
-  SERVER_PORT: '3000',
+  SERVER_PORT: '3001',
   LOG_LEVEL: 'info',
   LOG_PRETTY: 'false'
 } satisfies NodeJS.ProcessEnv
 
 describe('Gateway configuration', () => {
-  it('parses a runtime configuration with exact trusted origins', () => {
+  it('parses a runtime configuration with exact browser origins', () => {
     const config = loadRuntimeConfig(validEnvironment)
 
-    expect(config.auth.trustedOrigins).toEqual([
-      'http://localhost:3001',
-      'http://127.0.0.1:3001'
+    expect(config.browser.allowedOrigins).toEqual([
+      'http://localhost:3000',
+      'http://127.0.0.1:3000'
     ])
     expect(config.auth.basePath).toBe('/api/auth')
     expect(config.database.runtimeUrl).toContain('gateway_runtime')
-    expect(config.server).toEqual({ host: '127.0.0.1', port: 3000 })
+    expect(config.server).toEqual({ host: '127.0.0.1', port: 3001 })
     expect(config.log).toEqual({ level: 'info', pretty: false })
   })
 
@@ -42,16 +43,33 @@ describe('Gateway configuration', () => {
     expect(() => loadRuntimeConfig(environment)).toThrow(ConfigurationError)
   })
 
+  it('requires the Gateway-owned Browser Origin variable', () => {
+    const { GATEWAY_BROWSER_ALLOWED_ORIGINS: _, ...environment } =
+      validEnvironment
+
+    expect(() =>
+      loadRuntimeConfig({
+        ...environment,
+        BETTER_AUTH_TRUSTED_ORIGINS: 'http://localhost:3000'
+      })
+    ).toThrow(ConfigurationError)
+  })
+
   it.each([
     '*',
-    'http://*.localhost:3001',
-    'http://user:password@localhost:3001',
-    'http://localhost:3001/path'
-  ])('rejects an unsafe trusted origin: %s', (origin) => {
+    'http://*.localhost:3000',
+    'http://user:password@localhost:3000',
+    'http://localhost:3000/path',
+    'http://localhost:3000?query=yes',
+    'http://localhost:3000#fragment',
+    'http://localhost:3000/',
+    'http://localhost:3000,',
+    'http://localhost:3000,http://localhost:3000'
+  ])('rejects an unsafe browser origin list: %s', (origin) => {
     expect(() =>
       loadRuntimeConfig({
         ...validEnvironment,
-        BETTER_AUTH_TRUSTED_ORIGINS: origin
+        GATEWAY_BROWSER_ALLOWED_ORIGINS: origin
       })
     ).toThrow(ConfigurationError)
   })

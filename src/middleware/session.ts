@@ -14,8 +14,9 @@ export function createSessionMiddleware(auth: GatewayAuth) {
       return context.json(
         {
           error: {
-            code: 'UNAUTHORIZED',
-            message: 'Authentication required'
+            code: 'AUTHENTICATION_REQUIRED',
+            message: 'Authentication required',
+            requestId: context.var.requestId
           }
         },
         401

@@ -1,0 +1,39 @@
+{
+  "name": "@xdenovo/gateway-client",
+  "version": "0.0.0",
+  "description": "Typed Hono RPC client for the XDeNovo Gateway public HTTP API",
+  "type": "module",
+  "sideEffects": false,
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/XDenovo/gateway.git",
+    "directory": "packages/gateway-client"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com",
+    "access": "restricted"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "files": [
+    "CHANGELOG.md",
+    "dist/index.js",
+    "dist/index.d.ts",
+    "README.md"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc --project tsconfig.build.json && node ../../scripts/finalize-client-package.mjs",
+    "prepack": "pnpm run build"
+  },
+  "dependencies": {
+    "hono": "4.12.31"
+  }
+}

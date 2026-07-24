@@ -1,11 +1,12 @@
 # XDeNovo Gateway
 
 The Gateway is the XDeNovo platform authentication and authorization boundary. This repository
-currently provides the first Local persistence slice: PostgreSQL-backed Better Auth Sessions,
-Hono integration, least-privilege Drizzle migrations, and redacted structured logging.
+provides PostgreSQL-backed Better Auth Sessions, the first Website-facing public HTTP contract,
+the typed `@xdenovo/gateway-client` release boundary, least-privilege Drizzle migrations, and
+redacted structured logging.
 
-External login providers, MCP OAuth, Dashboard product routes, and Production deployment remain
-out of scope for this slice.
+External login providers, MCP OAuth, additional Dashboard product routes, and Production
+deployment remain out of scope for this slice.
 
 ## Prerequisites
 
@@ -49,8 +50,9 @@ Replace every placeholder locally. Use an independently generated Better Auth se
 
 Runtime configuration rejects missing values, non-exact origins, wildcard origins, an unexpected
 database identity, an insecure Production Auth base URL, or pretty logging outside development.
-`BETTER_AUTH_TRUSTED_ORIGINS` is a comma-separated exact allowlist. Do not add a wildcard when
-credentialed CORS is enabled.
+`GATEWAY_BROWSER_ALLOWED_ORIGINS` is a comma-separated exact allowlist. It drives Better Auth
+trusted Origins plus credentialed CORS/Origin rejection for Auth, `/v1/*`, and `/health`; it is not
+an authorization or network-trust setting. Do not add a wildcard.
 
 ## Migrations and development
 
@@ -79,8 +81,9 @@ The command is safe to rerun. Normal Gateway startup never applies migrations an
 pnpm dev
 ```
 
-The default example listens on `http://127.0.0.1:3000`. In Production, Caddy remains the only
-public listener; the Gateway application must stay behind it.
+The Local Website uses `http://localhost:3000`; the Gateway example listens on
+`http://127.0.0.1:3001` with Better Auth based at `http://localhost:3001`. In Production, Caddy
+remains the only public listener; the Gateway application must stay behind it.
 
 To run compiled output:
 
@@ -88,6 +91,10 @@ To run compiled output:
 pnpm build
 pnpm start
 ```
+
+The public routes, Browser Origin policy, client API, private-package installation, Changesets
+release flow, and recovery procedure are documented in
+[Public HTTP and Gateway client](./docs/public-http-client.md).
 
 ## Validation
 
@@ -112,6 +119,7 @@ pnpm test:integration
 pnpm test:integration -- test/integration/auth.integration.test.ts
 pnpm test:coverage
 pnpm build
+pnpm client:package:check
 pnpm db:check
 ```
 
@@ -120,7 +128,8 @@ runtime roles, apply the committed migrations, and stop the container. They do n
 credentials or require the sibling deployment checkout.
 
 CI installs with `--frozen-lockfile`, verifies regenerated Better Auth and Drizzle artifacts, and
-runs `pnpm validate`.
+runs `pnpm validate`. Validation also builds and inspects the exact client tarball and installs it
+into clean Node ESM, Browser bundler, and Website-baseline TypeScript 5 fixtures.
 
 ## Logging and security notes
 

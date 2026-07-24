@@ -7,6 +7,7 @@ import type { GatewayAuth } from './auth/runtime.js'
 import type { RuntimeConfig } from './config.js'
 import type { GatewayEnvironment } from './http-types.js'
 import { describeError } from './logging.js'
+import { createPublicRoutes } from './routes/public.js'
 
 interface CreateAppInput {
   auth: GatewayAuth
@@ -17,10 +18,21 @@ interface CreateAppInput {
 export function createApp({ auth, config, logger }: CreateAppInput) {
   const app = new Hono<GatewayEnvironment>()
   const authRoute = `${config.auth.basePath}/*`
-  const allowedOrigins = new Set([
-    config.auth.baseUrl,
-    ...config.auth.trustedOrigins
-  ])
+  const browserRoutePolicies = [
+    {
+      route: authRoute,
+      allowMethods: ['GET', 'POST', 'OPTIONS']
+    },
+    {
+      route: '/v1/*',
+      allowMethods: ['GET', 'OPTIONS']
+    },
+    {
+      route: '/health',
+      allowMethods: ['GET', 'OPTIONS']
+    }
+  ] as const
+  const allowedOrigins = new Set(config.browser.allowedOrigins)
 
   app.use('*', requestId({ limitLength: 128 }))
   app.use('*', async (context, next) => {
@@ -46,36 +58,39 @@ export function createApp({ auth, config, logger }: CreateAppInput) {
     }
   })
 
-  app.use(authRoute, async (context, next) => {
-    context.header('Cache-Control', 'no-store')
-    const origin = context.req.header('origin')
+  for (const { route, allowMethods } of browserRoutePolicies) {
+    app.use(route, async (context, next) => {
+      context.header('Cache-Control', 'no-store')
+      const origin = context.req.header('origin')
 
-    if (origin && !allowedOrigins.has(origin)) {
-      return context.json(
-        {
-          error: {
-            code: 'ORIGIN_NOT_ALLOWED',
-            message: 'Origin is not allowed'
-          }
-        },
-        403
-      )
-    }
+      if (origin && !allowedOrigins.has(origin)) {
+        return context.json(
+          {
+            error: {
+              code: 'ORIGIN_NOT_ALLOWED',
+              message: 'Origin is not allowed',
+              requestId: context.var.requestId
+            }
+          },
+          403
+        )
+      }
 
-    await next()
-  })
-  app.use(
-    authRoute,
-    cors({
-      origin: [...allowedOrigins],
-      allowMethods: ['GET', 'POST', 'OPTIONS'],
-      allowHeaders: ['Content-Type', 'Authorization'],
-      credentials: true
+      await next()
     })
-  )
+    app.use(
+      route,
+      cors({
+        origin: [...allowedOrigins],
+        allowMethods: [...allowMethods],
+        allowHeaders: ['Content-Type', 'Authorization'],
+        credentials: true
+      })
+    )
+  }
   app.on(['GET', 'POST'], authRoute, (context) => auth.handler(context.req.raw))
 
-  app.get('/', (context) => context.text('Hello Hono!'))
+  app.route('/', createPublicRoutes({ auth }))
 
   app.notFound((context) =>
     context.json(
@@ -104,7 +119,8 @@ export function createApp({ auth, config, logger }: CreateAppInput) {
       {
         error: {
           code: 'INTERNAL_SERVER_ERROR',
-          message: 'Internal server error'
+          message: 'Internal server error',
+          requestId: context.var.requestId
         }
       },
       500

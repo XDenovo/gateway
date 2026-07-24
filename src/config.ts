@@ -18,7 +18,7 @@ const httpOriginSchema = z.string().refine(isExactHttpOrigin, {
   message: 'must be an exact HTTP or HTTPS origin'
 })
 
-const trustedOriginsSchema = z
+const browserAllowedOriginsSchema = z
   .string()
   .min(1)
   .transform((value) => value.split(',').map((origin) => origin.trim()))
@@ -39,7 +39,7 @@ const commonEnvironmentSchema = z
     BETTER_AUTH_BASE_URL: httpOriginSchema,
     BETTER_AUTH_BASE_PATH: authBasePathSchema,
     BETTER_AUTH_SECRET: z.string().min(32),
-    BETTER_AUTH_TRUSTED_ORIGINS: trustedOriginsSchema,
+    GATEWAY_BROWSER_ALLOWED_ORIGINS: browserAllowedOriginsSchema,
     SERVER_HOST: z.string().trim().min(1),
     SERVER_PORT: z.coerce.number().int().min(1).max(65_535),
     LOG_LEVEL: logLevelSchema,
@@ -153,8 +153,10 @@ function mapRuntimeConfig(
     auth: {
       baseUrl: environment.BETTER_AUTH_BASE_URL,
       basePath: environment.BETTER_AUTH_BASE_PATH,
-      secret: environment.BETTER_AUTH_SECRET,
-      trustedOrigins: environment.BETTER_AUTH_TRUSTED_ORIGINS
+      secret: environment.BETTER_AUTH_SECRET
+    },
+    browser: {
+      allowedOrigins: environment.GATEWAY_BROWSER_ALLOWED_ORIGINS
     },
     database: {
       runtimeUrl: environment.DATABASE_RUNTIME_URL

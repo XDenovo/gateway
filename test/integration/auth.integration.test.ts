@@ -74,15 +74,15 @@ describe.sequential('persistent Better Auth integration', () => {
     )
     config = loadLocalConfig({
       NODE_ENV: 'test',
-      BETTER_AUTH_BASE_URL: 'http://localhost:3000',
+      BETTER_AUTH_BASE_URL: 'http://localhost:3001',
       BETTER_AUTH_BASE_PATH: '/api/auth',
       BETTER_AUTH_SECRET: authSecret,
-      BETTER_AUTH_TRUSTED_ORIGINS:
-        'http://localhost:3001,http://127.0.0.1:3001',
+      GATEWAY_BROWSER_ALLOWED_ORIGINS:
+        'http://localhost:3000,http://127.0.0.1:3000',
       DATABASE_MIGRATION_URL: migrationUrl,
       DATABASE_RUNTIME_URL: runtimeUrl,
       SERVER_HOST: '127.0.0.1',
-      SERVER_PORT: '3000',
+      SERVER_PORT: '3001',
       LOG_LEVEL: 'info',
       LOG_PRETTY: 'false'
     })
@@ -92,11 +92,11 @@ describe.sequential('persistent Better Auth integration', () => {
     database = createDatabase(config.database.runtimeUrl)
     const runtimeAuth = createRuntimeAuth({
       database: database.client,
-      config: config.auth
+      config
     })
     testAuth = createTestAuth({
       database: database.client,
-      config: config.auth
+      config
     })
     logSink = new LogSink()
     const logger = createLogger(config.log, logSink)
@@ -122,6 +122,53 @@ describe.sequential('persistent Better Auth integration', () => {
     await database?.close()
     await bootstrapPool?.end()
     await container?.stop()
+  })
+
+  it('serves shallow health without authentication or dependency details', async () => {
+    const unavailableDatabase = createDatabase(config.database.runtimeUrl)
+    const healthAuth = createRuntimeAuth({
+      database: unavailableDatabase.client,
+      config
+    })
+    const healthApp = createApp({
+      auth: healthAuth,
+      config,
+      logger: createLogger(config.log, logSink)
+    })
+    await unavailableDatabase.close()
+
+    const response = await healthApp.request(`${config.auth.baseUrl}/health`, {
+      headers: {
+        cookie: 'better-auth.session_token=unrelated'
+      }
+    })
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    expect(await response.json()).toEqual({ status: 'ok' })
+
+    const root = await healthApp.request(config.auth.baseUrl)
+    expect(root.status).toBe(404)
+    expect(await root.text()).not.toContain('Hello Hono!')
+  })
+
+  it('maps a persisted Session to the exact current-User contract', async () => {
+    const login = await createPersistedLogin('current-user')
+    const response = await app.request(`${config.auth.baseUrl}/v1/me`, {
+      headers: login.headers
+    })
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    expect(await response.json()).toEqual({
+      user: {
+        id: login.userId,
+        displayName: login.displayName,
+        email: login.email,
+        emailVerified: true,
+        avatarUrl: null
+      }
+    })
   })
 
   it('applies the committed migration repeatedly without changing the schema', async () => {
@@ -187,17 +234,23 @@ describe.sequential('persistent Better Auth integration', () => {
     ['missing', undefined],
     ['invalid', 'better-auth.session_token=invalid-session-token']
   ])('rejects a %s Session with a stable response', async (_kind, cookie) => {
-    const headers = cookie ? { cookie } : undefined
-    const response = await app.request(
-      `${config.auth.baseUrl}/test/protected`,
-      { headers }
-    )
+    const headers = new Headers({
+      'x-request-id': `${_kind}-session-request`
+    })
+    if (cookie) {
+      headers.set('cookie', cookie)
+    }
+    const response = await app.request(`${config.auth.baseUrl}/v1/me`, {
+      headers
+    })
 
     expect(response.status).toBe(401)
+    expect(response.headers.get('cache-control')).toBe('no-store')
     expect(await response.json()).toEqual({
       error: {
-        code: 'UNAUTHORIZED',
-        message: 'Authentication required'
+        code: 'AUTHENTICATION_REQUIRED',
+        message: 'Authentication required',
+        requestId: `${_kind}-session-request`
       }
     })
   })
@@ -209,12 +262,22 @@ describe.sequential('persistent Better Auth integration', () => {
       .set({ expiresAt: new Date(0) })
       .where(eq(session.token, login.token))
 
-    const response = await app.request(
-      `${config.auth.baseUrl}/test/protected`,
-      { headers: login.headers }
-    )
+    const headers = mergeHeaders(login.headers, {
+      'x-request-id': 'expired-session-request'
+    })
+    const response = await app.request(`${config.auth.baseUrl}/v1/me`, {
+      headers
+    })
 
     expect(response.status).toBe(401)
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    expect(await response.json()).toEqual({
+      error: {
+        code: 'AUTHENTICATION_REQUIRED',
+        message: 'Authentication required',
+        requestId: 'expired-session-request'
+      }
+    })
   })
 
   it('rejects a Session after its User is deleted', async () => {
@@ -222,50 +285,139 @@ describe.sequential('persistent Better Auth integration', () => {
     const helpers = (await testAuth.$context).test
     await helpers.deleteUser(login.userId)
 
-    const response = await app.request(
-      `${config.auth.baseUrl}/test/protected`,
-      { headers: login.headers }
-    )
+    const headers = mergeHeaders(login.headers, {
+      'x-request-id': 'deleted-user-request'
+    })
+    const response = await app.request(`${config.auth.baseUrl}/v1/me`, {
+      headers
+    })
 
     expect(response.status).toBe(401)
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    expect(await response.json()).toEqual({
+      error: {
+        code: 'AUTHENTICATION_REQUIRED',
+        message: 'Authentication required',
+        requestId: 'deleted-user-request'
+      }
+    })
   })
 
-  it('rejects untrusted origins and allows credentialed exact origins', async () => {
-    const rejected = await app.request(
+  it('keeps Session infrastructure failures as safe internal errors', async () => {
+    const login = await createPersistedLogin('database-failure')
+    const unavailableDatabase = createDatabase(config.database.runtimeUrl)
+    const unavailableAuth = createRuntimeAuth({
+      database: unavailableDatabase.client,
+      config
+    })
+    const unavailableApp = createApp({
+      auth: unavailableAuth,
+      config,
+      logger: createLogger(config.log, logSink)
+    })
+    await unavailableDatabase.close()
+
+    const response = await unavailableApp.request(
+      `${config.auth.baseUrl}/v1/me`,
+      {
+        headers: mergeHeaders(login.headers, {
+          'x-request-id': 'database-failure-request'
+        })
+      }
+    )
+
+    expect(response.status).toBe(500)
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    expect(await response.json()).toEqual({
+      error: {
+        code: 'INTERNAL_SERVER_ERROR',
+        message: 'Internal server error',
+        requestId: 'database-failure-request'
+      }
+    })
+  })
+
+  it('rejects untrusted Origins before business logic on every Browser route', async () => {
+    const rejectedAuth = await app.request(
       `${config.auth.baseUrl}${config.auth.basePath}/sign-out`,
       {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          origin: 'http://attacker.example'
+          origin: 'http://attacker.example',
+          'x-request-id': 'rejected-auth-origin'
         }
       }
     )
-    expect(rejected.status).toBe(403)
-    expect(await rejected.json()).toEqual({
+    expect(rejectedAuth.status).toBe(403)
+    expect(rejectedAuth.headers.get('cache-control')).toBe('no-store')
+    expect(await rejectedAuth.json()).toEqual({
       error: {
         code: 'ORIGIN_NOT_ALLOWED',
-        message: 'Origin is not allowed'
+        message: 'Origin is not allowed',
+        requestId: 'rejected-auth-origin'
       }
     })
 
-    const preflight = await app.request(
+    const rejectedMe = await app.request(`${config.auth.baseUrl}/v1/me`, {
+      headers: {
+        origin: 'http://localhost:30000',
+        'x-request-id': 'rejected-me-origin'
+      }
+    })
+    expect(rejectedMe.status).toBe(403)
+    expect(await rejectedMe.json()).toEqual({
+      error: {
+        code: 'ORIGIN_NOT_ALLOWED',
+        message: 'Origin is not allowed',
+        requestId: 'rejected-me-origin'
+      }
+    })
+  })
+
+  it('allows exact Origins with credentialed CORS and correct Vary behavior', async () => {
+    const authPreflight = await app.request(
       `${config.auth.baseUrl}${config.auth.basePath}/sign-out`,
       {
         method: 'OPTIONS',
         headers: {
-          origin: 'http://localhost:3001',
+          origin: 'http://localhost:3000',
           'access-control-request-method': 'POST'
         }
       }
     )
-    expect(preflight.status).toBe(204)
-    expect(preflight.headers.get('access-control-allow-origin')).toBe(
-      'http://localhost:3001'
+    expect(authPreflight.status).toBe(204)
+    expect(authPreflight.headers.get('access-control-allow-origin')).toBe(
+      'http://localhost:3000'
     )
-    expect(preflight.headers.get('access-control-allow-credentials')).toBe(
+    expect(authPreflight.headers.get('access-control-allow-credentials')).toBe(
       'true'
     )
+
+    const healthPreflight = await app.request(`${config.auth.baseUrl}/health`, {
+      method: 'OPTIONS',
+      headers: {
+        origin: 'http://localhost:3000',
+        'access-control-request-method': 'POST'
+      }
+    })
+    expect(healthPreflight.status).toBe(204)
+    expect(healthPreflight.headers.get('access-control-allow-methods')).toBe(
+      'GET,OPTIONS'
+    )
+
+    const health = await app.request(`${config.auth.baseUrl}/health`, {
+      headers: {
+        origin: 'http://localhost:3000'
+      }
+    })
+    expect(health.status).toBe(200)
+    expect(health.headers.get('access-control-allow-origin')).toBe(
+      'http://localhost:3000'
+    )
+    expect(health.headers.get('access-control-allow-credentials')).toBe('true')
+    expect(health.headers.get('vary')).toContain('Origin')
+    expect(health.headers.get('cache-control')).toBe('no-store')
   })
 
   it('uses a host-only Session Cookie', async () => {
@@ -275,7 +427,7 @@ describe.sequential('persistent Better Auth integration', () => {
       {
         method: 'POST',
         headers: mergeHeaders(login.headers, {
-          origin: 'http://localhost:3001'
+          origin: 'http://localhost:3000'
         })
       }
     )
@@ -305,7 +457,8 @@ describe.sequential('persistent Better Auth integration', () => {
     expect(await response.json()).toEqual({
       error: {
         code: 'INTERNAL_SERVER_ERROR',
-        message: 'Internal server error'
+        message: 'Internal server error',
+        requestId: 'integration-request-id'
       }
     })
     for (const secret of [
@@ -332,15 +485,19 @@ describe.sequential('persistent Better Auth integration', () => {
 
   async function createPersistedLogin(label: string) {
     const helpers = (await testAuth.$context).test
+    const email = `${label}@example.test`
+    const displayName = `Test ${label}`
     const draft = helpers.createUser({
-      email: `${label}@example.test`,
-      name: `Test ${label}`
+      email,
+      name: displayName
     })
     const user = await helpers.saveUser(draft)
     const login = await helpers.login({ userId: user.id })
 
     return {
       headers: login.headers,
+      displayName,
+      email,
       sessionId: login.session.id,
       token: login.token,
       userId: user.id
