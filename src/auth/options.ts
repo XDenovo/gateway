@@ -7,22 +7,22 @@ import type { GatewayDatabaseClient } from '../db/database.js'
 
 export interface AuthFactoryInput {
   database: GatewayDatabaseClient
-  config: RuntimeConfig['auth']
+  config: Pick<RuntimeConfig, 'auth' | 'browser'>
 }
 
 export function createAuthOptions({ database, config }: AuthFactoryInput) {
-  const secureCookies = new URL(config.baseUrl).protocol === 'https:'
+  const secureCookies = new URL(config.auth.baseUrl).protocol === 'https:'
 
   return {
     appName: 'XDeNovo Gateway',
-    baseURL: config.baseUrl,
-    basePath: config.basePath,
-    secret: config.secret,
+    baseURL: config.auth.baseUrl,
+    basePath: config.auth.basePath,
+    secret: config.auth.secret,
     database: drizzleAdapter(database, {
       provider: 'pg',
       schema: authSchema
     }),
-    trustedOrigins: [...config.trustedOrigins],
+    trustedOrigins: [...config.browser.allowedOrigins],
     logger: {
       disabled: true
     },

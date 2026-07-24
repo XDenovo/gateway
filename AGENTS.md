@@ -5,8 +5,8 @@
 - This repository owns the XDeNovo platform Gateway: authentication and authorization, the
   Dashboard Web API, invocation and billing events, and the unified public MCP endpoint.
 - The production public endpoint is `https://api.xdenovoai.com/`.
-- This is an independent Git repository, not a package in a workspace monorepo and not a
-  deployable part of the parent checkout.
+- This is an independent Git repository with its own small pnpm workspace. It is not a package in
+  the parent checkout's workspace and is not a deployable part of that parent checkout.
 - Use the canonical
   [Platform architecture](https://github.com/XDenovo/platform/blob/main/docs/architecture.md) and
   [approved technology stack](https://github.com/XDenovo/platform/blob/main/docs/techstack.md) as
@@ -50,8 +50,8 @@
 - `test/`: unit tests, PostgreSQL 18.4 integration tests, and the static test-only Auth factory.
 - `drizzle/`: committed SQL migrations and Drizzle metadata.
 - `docs/`: Gateway-specific technical design.
-- `pnpm-workspace.yaml`: pnpm supply-chain and dependency-build policy for this single-package
-  repository.
+- `packages/gateway-client/`: independently publishable, ESM-only typed Hono RPC client.
+- `pnpm-workspace.yaml`: workspace membership plus pnpm supply-chain and dependency-build policy.
 
 A library mentioned in a design document is not installed or adopted until the manifest,
 lockfile, and required configuration exist.
@@ -95,7 +95,8 @@ pnpm start
 ```
 
 - `pnpm dev` runs Node watch mode with the `tsx` loader and restarts on source changes.
-- The example configuration listens on `http://127.0.0.1:3000`.
+- The Local Website is `http://localhost:3000`; the example Gateway listens on
+  `http://127.0.0.1:3001` with Better Auth based at `http://localhost:3001`.
 - `pnpm build` compiles `src/` into `dist/`.
 - `pnpm start` runs `dist/index.js` and therefore requires a successful build first.
 - `pnpm db:migrate` loads only `.env.migration`; normal runtime commands load only `.env.runtime`.
@@ -147,6 +148,7 @@ pnpm test:integration
 pnpm test:integration -- test/integration/auth.integration.test.ts
 pnpm test:coverage
 pnpm build
+pnpm client:package:check
 pnpm db:check
 ```
 
@@ -156,8 +158,9 @@ test roles, apply the committed migrations, and require Docker. No coverage thre
 enforced.
 
 CI runs a frozen install, regenerates and checks the Better Auth schema and Drizzle migrations,
-then runs `pnpm validate`. Reproduce generated-artifact validation on a clean worktree with
-`pnpm check:generated`.
+then runs `pnpm validate`. Validation includes the packed Gateway client and its clean Node,
+Browser, and TypeScript 5 consumers. Reproduce generated-artifact validation on a clean worktree
+with `pnpm check:generated`.
 
 Security- and protocol-sensitive tests should cover, as applicable:
 

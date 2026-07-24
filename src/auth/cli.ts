@@ -11,13 +11,13 @@ const schemaGenerationDatabase = drizzle(schemaGenerationPool)
 
 export const auth = betterAuth({
   appName: 'XDeNovo Gateway',
-  baseURL: 'http://localhost:3000',
+  baseURL: 'http://localhost:3001',
   basePath: '/api/auth',
   secret: 'schema-generation-only'.repeat(2),
   database: drizzleAdapter(schemaGenerationDatabase, {
     provider: 'pg'
   }),
-  trustedOrigins: ['http://localhost:3001'],
+  trustedOrigins: ['http://localhost:3000'],
   advanced: {
     crossSubDomainCookies: {
       enabled: false

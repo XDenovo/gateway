@@ -8,7 +8,14 @@
     }
   },
   "files": {
-    "includes": ["**", "!dist", "!coverage", "!drizzle/meta"]
+    "includes": [
+      "**",
+      "!**/dist",
+      "!coverage",
+      "!.artifacts",
+      "!.client-build",
+      "!drizzle/meta"
+    ]
   },
   "formatter": {
     "enabled": true,

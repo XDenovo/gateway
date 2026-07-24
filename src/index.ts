@@ -15,7 +15,7 @@ async function startGateway(): Promise<void> {
     await database.verifyConnection()
     const auth = createRuntimeAuth({
       database: database.client,
-      config: config.auth
+      config
     })
     const app = createApp({ auth, config, logger })
     const server = serve(
