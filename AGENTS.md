@@ -44,6 +44,11 @@
 - pnpm is the repository package manager. Exact package and dependency versions are owned by
   `package.json` and `pnpm-lock.yaml`.
 - `src/index.ts`: current application and process entry point.
+- `src/app.ts`: Hono application construction without binding a listener.
+- `src/auth/`: runtime Better Auth factory and its schema-generation-only CLI configuration.
+- `src/db/`: generated Better Auth schema, runtime database construction, and explicit migrator.
+- `test/`: unit tests, PostgreSQL 18.4 integration tests, and the static test-only Auth factory.
+- `drizzle/`: committed SQL migrations and Drizzle metadata.
 - `docs/`: Gateway-specific technical design.
 - `pnpm-workspace.yaml`: pnpm supply-chain and dependency-build policy for this single-package
   repository.
@@ -53,10 +58,8 @@ lockfile, and required configuration exist.
 
 ## Setup
 
-The pnpm version is pinned through the `packageManager` field in `package.json`.
-
-TODO: Pin the Node.js runtime version, then document the prerequisite and keep the development,
-CI, container, and production runtimes aligned.
+Node.js `24.18.0` is pinned in `.node-version` and `package.json`. pnpm `11.15.1` is pinned through
+the `packageManager` field. Docker is required only for Testcontainers integration tests.
 
 ```bash
 pnpm install --frozen-lockfile
@@ -76,11 +79,10 @@ Do not introduce another package-manager lockfile.
 Review any dependency build script before adding a narrowly scoped approval to `allowBuilds` in
 `pnpm-workspace.yaml`. Never enable all present and future dependency build scripts globally.
 
-TODO: When application configuration is introduced, add a non-secret example and document the
-exact local setup and startup validation commands.
-
-TODO: When persistence is introduced, document the local database startup, migration, test
-database, and recovery or reset commands.
+Runtime and migration credentials must stay in separate process environments. Copy
+`.env.runtime.example` to `.env.runtime` and `.env.migration.example` to `.env.migration`, then
+replace the non-secret placeholders. The sibling `platform-deploy` repository owns PostgreSQL
+startup, bootstrap, persistence, and reset; this repository owns only Gateway migrations.
 
 Never commit credentials or secret-bearing environment files.
 
@@ -92,14 +94,12 @@ pnpm build
 pnpm start
 ```
 
-- `pnpm dev` runs `tsx watch src/index.ts` and restarts on source changes.
-- The current local server listens on `http://localhost:3000`.
+- `pnpm dev` runs Node watch mode with the `tsx` loader and restarts on source changes.
+- The example configuration listens on `http://127.0.0.1:3000`.
 - `pnpm build` compiles `src/` into `dist/`.
 - `pnpm start` runs `dist/index.js` and therefore requires a successful build first.
-
-As the application grows, separate construction and export of the Hono app from the process that
-binds the network port. Route and middleware tests should be able to call `app.request()` without
-starting a server.
+- `pnpm db:migrate` loads only `.env.migration`; normal runtime commands load only `.env.runtime`.
+- Route and middleware tests call the app returned by `createApp()` without starting a server.
 
 ## Implementation Conventions
 
@@ -122,25 +122,42 @@ starting a server.
 - Keep authentication and authorization checks explicit at every public entry point; successful
   authentication alone does not imply permission for a tool or resource.
 
-TODO: When structured logging is configured, document the logger, request-ID propagation, field
-naming, and redaction conventions.
+Pino writes structured NDJSON by default. Hono request IDs create request-scoped child loggers.
+Use stable `event` field names. Never log exception messages or stacks at public trust boundaries;
+use `describeError()` and the configured Pino redaction paths. Pretty logging is development-only.
 
-TODO: When Biome is configured, document the exact lint, format, check, and safe-fix commands,
-including focused commands for changed files.
+Biome commands are `pnpm check` and `pnpm check:fix`. Focus a check or safe fix with
+`pnpm exec biome check <paths...>` or `pnpm exec biome check --write <paths...>`.
 
 ## Testing and Validation
 
-The available repository validation is:
+The complete repository validation is:
 
 ```bash
-pnpm build
+pnpm validate
 ```
 
-TODO: When the test framework is configured, document the full, focused, unit, integration, and
-coverage commands; test locations and naming; fixture and database setup; and any required
-coverage threshold.
+Focused validation commands are:
 
-TODO: When repository CI is added, list every required check and its local reproduction command.
+```bash
+pnpm typecheck
+pnpm test:unit
+pnpm test:unit -- test/unit/config.test.ts
+pnpm test:integration
+pnpm test:integration -- test/integration/auth.integration.test.ts
+pnpm test:coverage
+pnpm build
+pnpm db:check
+```
+
+Unit tests live in `test/unit/**/*.test.ts`. Integration tests live in
+`test/integration/**/*.test.ts`, start `postgres:18.4` through Testcontainers, bootstrap isolated
+test roles, apply the committed migrations, and require Docker. No coverage threshold is currently
+enforced.
+
+CI runs a frozen install, regenerates and checks the Better Auth schema and Drizzle migrations,
+then runs `pnpm validate`. Reproduce generated-artifact validation on a clean worktree with
+`pnpm check:generated`.
 
 Security- and protocol-sensitive tests should cover, as applicable:
 
