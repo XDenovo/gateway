@@ -1,6 +1,6 @@
 {
   "name": "@xdenovo/gateway-client",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Typed Hono RPC client for the XDeNovo Gateway public HTTP API",
   "type": "module",
   "sideEffects": false,
