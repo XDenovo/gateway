@@ -19,7 +19,10 @@ dist/
 
 # env
 .env
+.env.migration
 .env.production
+.env.runtime
+.env.test
 
 # logs
 logs/
